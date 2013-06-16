@@ -22,11 +22,11 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelOutboundHandler;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.MessageList;
 
-import java.util.concurrent.ScheduledFuture;
+import java.net.SocketAddress;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -65,11 +65,7 @@ import java.util.concurrent.TimeUnit;
  * @see ReadTimeoutHandler
  * @see IdleStateHandler
  */
-public class WriteTimeoutHandler extends ChannelOutboundHandlerAdapter {
-
-    private final long timeoutMillis;
-
-    private boolean closed;
+public class WriteTimeoutHandler extends TimeoutHandler<WriteActivityTracker> implements ChannelOutboundHandler {
 
     /**
      * Creates a new instance.
@@ -90,55 +86,48 @@ public class WriteTimeoutHandler extends ChannelOutboundHandlerAdapter {
      *        the {@link TimeUnit} of {@code timeout}
      */
     public WriteTimeoutHandler(long timeout, TimeUnit unit) {
-        if (unit == null) {
-            throw new NullPointerException("unit");
-        }
-
-        if (timeout <= 0) {
-            timeoutMillis = 0;
-        } else {
-            timeoutMillis = Math.max(unit.toMillis(timeout), 1);
-        }
+        super(new WriteActivityTracker(), timeout, unit);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, MessageList<Object> msgs, ChannelPromise promise) throws Exception {
-        scheduleTimeout(ctx, promise);
-        super.write(ctx, msgs, promise);
+        promise.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) throws Exception {
+                getActivityTracker().activity();
+            }
+        });
+        ctx.write(msgs, promise);
     }
 
-    private void scheduleTimeout(final ChannelHandlerContext ctx, final ChannelPromise future) {
-        if (timeoutMillis > 0) {
-            // Schedule a timeout.
-            final ScheduledFuture<?> sf = ctx.executor().schedule(new Runnable() {
-                @Override
-                public void run() {
-                    if (future.tryFailure(WriteTimeoutException.INSTANCE)) {
-                        // If succeeded to mark as failure, notify the pipeline, too.
-                        try {
-                            writeTimedOut(ctx);
-                        } catch (Throwable t) {
-                            ctx.fireExceptionCaught(t);
-                        }
-                    }
-                }
-            }, timeoutMillis, TimeUnit.MILLISECONDS);
-
-            // Cancel the scheduled timeout if the flush future is complete.
-            future.addListener(new ChannelFutureListener() {
-                @Override
-                public void operationComplete(ChannelFuture future) throws Exception {
-                    sf.cancel(false);
-                }
-            });
-        }
+    @Override
+    public void bind(ChannelHandlerContext ctx, SocketAddress localAddress, ChannelPromise promise) throws Exception {
+        ctx.bind(localAddress, promise);
     }
 
-    protected void writeTimedOut(ChannelHandlerContext ctx) throws Exception {
-        if (!closed) {
-            ctx.fireExceptionCaught(WriteTimeoutException.INSTANCE);
-            ctx.close();
-            closed = true;
-        }
+    @Override
+    public void connect(ChannelHandlerContext ctx, SocketAddress remoteAddress, SocketAddress localAddress,
+            ChannelPromise promise) throws Exception {
+        ctx.connect(remoteAddress, localAddress, promise);
+    }
+
+    @Override
+    public void disconnect(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+        ctx.disconnect(promise);
+    }
+
+    @Override
+    public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+        ctx.close(promise);
+    }
+
+    @Override
+    public void deregister(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+        ctx.deregister(promise);
+    }
+
+    @Override
+    public void read(ChannelHandlerContext ctx) {
+        ctx.read();
     }
 }
